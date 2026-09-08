@@ -187,31 +187,16 @@ pulumi config set subject 'repo:<owner>@<ownerId>/<repo>@<repoId>:*'
 pulumi up
 ```
 
-Two things will trip you up, and both cost a failed run to discover.
-
-**One issuer per URL per org.** If anyone has already registered
-`https://token.actions.githubusercontent.com` in your organization, `pulumi up`
-fails with `400 ... already registered`, and there is no way to add a second.
-Because the provider models policies inline on the issuer, importing it means
-your stack owns *every* policy on it, including other people's. When the issuer
-is not yours, use `scripts/05-add-oidc-policy.sh` instead: it appends your policy
-via the Cloud API, then diffs every pre-existing policy before and after to prove
-nothing was disturbed.
-
-**The subject claim is probably not what the docs say.** Pulumi's documentation
-gives `repo:<organization>/<repo>:*`. GitHub may instead emit an *immutable*
-subject carrying numeric owner and repository IDs:
+**Set `subject` from your own workflow log.** GitHub emits one of two subject
+shapes, and the policy has to match the one your repository actually sends:
 
 ```
-repo:wlami@564295/esc-doks-kubeconfig@1361241739:ref:refs/heads/main
+repo:<owner>/<repo>:ref:refs/heads/main                        # name-based
+repo:<owner>@<ownerId>/<repo>@<repoId>:ref:refs/heads/main      # immutable, with numeric IDs
 ```
 
-A policy written against the documented pattern silently fails to match, and the
-only symptom is `401 Unauthorized (access_denied: unauthorized)` from the token
-exchange, which looks identical to having no policy at all.
-
-Do not guess the format. The workflow's first step prints the claims your job
-actually presents, so run it once and read the log:
+The first step of the workflow prints the claims your job presents, so run it
+once and copy the value:
 
 ```
 sub                repo:wlami@564295/esc-doks-kubeconfig@1361241739:ref:refs/heads/main
@@ -219,9 +204,28 @@ aud                urn:pulumi:org:demo
 repository         wlami/esc-doks-kubeconfig
 ```
 
-Then set `subject` to that value with the trailing segment wildcarded
-(`...@1361241739:*`). Pinning the numeric IDs is *stronger* than the documented
-pattern, since it survives repository renames and blocks name-reuse attacks.
+Take the `sub` and wildcard the trailing segment, so any branch of that
+repository matches:
+
+```
+subject = repo:wlami@564295/esc-doks-kubeconfig@1361241739:*
+aud     = urn:pulumi:org:demo
+```
+
+If the policy subject does not match the presented claim, the token exchange
+returns `401 Unauthorized (access_denied: unauthorized)`, the same error you get
+with no policy at all, so check the claim before anything else. When the
+immutable form is in play, pinning the numeric IDs also survives repository
+renames.
+
+**An org holds one issuer per URL.** If
+`https://token.actions.githubusercontent.com` is already registered in your
+organization, `pulumi up` returns `400 ... already registered` and there is no
+second slot. The provider models policies inline on the issuer, so importing it
+would put every policy on that issuer, including other teams', under your stack.
+When the issuer is not yours, run `scripts/05-add-oidc-policy.sh`: it appends
+your policy through the Cloud API and then diffs every pre-existing policy before
+and after to confirm none changed.
 
 ## What this does and does not buy you
 

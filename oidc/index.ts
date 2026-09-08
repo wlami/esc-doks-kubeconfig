@@ -6,12 +6,12 @@ const config = new pulumi.Config();
 // The Pulumi organization that will trust GitHub Actions.
 const org = config.require("org");
 
-// The subject claim your workflow actually presents. Do NOT guess this.
-// See the README: GitHub may emit an "immutable" subject containing numeric
-// owner and repository IDs, and the pattern in Pulumi's docs will not match it.
+// The subject claim your workflow presents. Read it from the workflow log
+// rather than constructing it: GitHub emits one of two shapes, and the policy
+// must match the one your repository actually sends.
 //
-//   repo:<owner>/<repo>:*                      <- legacy format
-//   repo:<owner>@<ownerId>/<repo>@<repoId>:*   <- immutable format
+//   repo:<owner>/<repo>:*                      name-based
+//   repo:<owner>@<ownerId>/<repo>@<repoId>:*   immutable, with numeric IDs
 const subject = config.require("subject");
 
 // Registering an issuer alone grants nothing: Pulumi Cloud attaches a default
