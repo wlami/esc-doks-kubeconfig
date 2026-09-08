@@ -1,34 +1,81 @@
-# CI with zero stored secrets:
-#   GitHub OIDC -> short-lived Pulumi token -> ESC vends DO token + kubeconfig.
-# No DIGITALOCEAN_ACCESS_TOKEN in repo secrets. No kubeconfig in the repo.
+# Proof that CI can reach a Kubernetes cluster with no long-lived credentials
+# stored anywhere in GitHub.
+#
+# What is NOT in this repository or its secrets:
+#   - a DigitalOcean API token
+#   - a kubeconfig
+#   - a Pulumi access token
+#
+# The chain instead is:
+#   GitHub mints an OIDC token for this job
+#     -> pulumi/auth-actions exchanges it for a short-lived Pulumi token
+#       -> pulumi/esc-action opens the ESC environment
+#         -> ESC yields DIGITALOCEAN_ACCESS_TOKEN + a kubeconfig temp file
+#           -> kubectl execs doctl, which mints the cluster credential
 name: kubectl via ESC
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
 
 permissions:
-  id-token: write   # required to mint the GitHub OIDC token
+  id-token: write   # required for GitHub to mint the OIDC token
   contents: read
 
 jobs:
   kubectl:
     runs-on: ubuntu-latest
     steps:
-      - name: Exchange GitHub OIDC token for a Pulumi access token
+      - uses: actions/checkout@v4
+
+      - name: Show that no DigitalOcean or Kubernetes secret is configured
+        env:
+          DO_FROM_SECRETS: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          KUBECONFIG_FROM_SECRETS: ${{ secrets.KUBECONFIG }}
+        run: |
+          echo "DIGITALOCEAN_ACCESS_TOKEN in repo secrets: ${DO_FROM_SECRETS:+yes}${DO_FROM_SECRETS:-no}"
+          echo "KUBECONFIG in repo secrets:                ${KUBECONFIG_FROM_SECRETS:+yes}${KUBECONFIG_FROM_SECRETS:-no}"
+          echo "kubeconfig files committed to the repo:    $(git ls-files | grep -ci kubeconfig || true)"
+
+      - name: Exchange the GitHub OIDC token for a short-lived Pulumi token
         uses: pulumi/auth-actions@v1
         with:
           organization: ${{ vars.PULUMI_ORG }}
           requested-token-type: urn:pulumi:token-type:access_token:organization
 
-      - name: Install doctl (no token: ESC supplies it at run time)
+      - name: Install doctl
         run: |
-          curl -sL https://github.com/digitalocean/doctl/releases/download/v1.168.0/doctl-1.168.0-linux-amd64.tar.gz \
-            | tar -xz -C /usr/local/bin doctl
+          mkdir -p "$HOME/.local/bin"
+          curl -sSL https://github.com/digitalocean/doctl/releases/download/v1.168.0/doctl-1.168.0-linux-amd64.tar.gz \
+            | tar -xz -C "$HOME/.local/bin" doctl
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Load ESC environment
+      - name: Open the ESC environment
         uses: pulumi/esc-action@v3
         with:
-          environment: esc-doks-demo/doks-dev
+          environment: ${{ vars.PULUMI_ORG }}/esc-doks-demo/doks-dev
+
+      - name: The vended kubeconfig contains no credential
+        run: |
+          echo "KUBECONFIG -> $KUBECONFIG"
+          echo "--- users: stanza ---"
+          sed -n '/^users:/,$p' "$KUBECONFIG"
+          n=$(grep -cE '^[[:space:]]*(token|client-key-data|client-certificate-data):' "$KUBECONFIG" || true)
+          echo "--- embedded credentials: $n ---"
+          test "$n" -eq 0
 
       - name: Talk to the cluster
-        run: kubectl get nodes -o wide
+        run: |
+          kubectl get nodes -o wide
+          kubectl get namespaces
+
+      - name: Prove write access, then clean up
+        run: |
+          kubectl create namespace esc-ci-proof --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n esc-ci-proof create configmap run-marker \
+            --from-literal=run_id="$GITHUB_RUN_ID" \
+            --from-literal=sha="$GITHUB_SHA" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n esc-ci-proof get configmap run-marker -o yaml
+          kubectl delete namespace esc-ci-proof --wait=false
