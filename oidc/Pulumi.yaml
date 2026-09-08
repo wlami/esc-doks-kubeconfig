@@ -1,0 +1,3 @@
+name: esc-doks-demo-oidc
+runtime: nodejs
+description: Registers GitHub Actions as a trusted OIDC issuer in a Pulumi org.
