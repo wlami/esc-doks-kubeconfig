@@ -160,11 +160,68 @@ Verify at <https://cloud.digitalocean.com/kubernetes/clusters> afterwards.
 
 `.github/workflows/kubectl-via-esc.yml` closes the other half. GitHub mints an
 OIDC token, `pulumi/auth-actions` exchanges it for a short-lived Pulumi token,
-and `pulumi/esc-action` loads the same environment. There is no
-`DIGITALOCEAN_ACCESS_TOKEN` in repository secrets and no kubeconfig in the repo.
+and `pulumi/esc-action` opens the same environment, projecting `files:` into a
+temp file exactly as the CLI does. There is no `DIGITALOCEAN_ACCESS_TOKEN` in
+repository secrets and no kubeconfig in the repo. Verified output from a real
+run:
 
-Requires a one-time OIDC issuer registration in your Pulumi org
-([docs](https://www.pulumi.com/docs/administration/access-identity/oidc-issuers/github/)).
+```
+DIGITALOCEAN_ACCESS_TOKEN in repo secrets: no
+KUBECONFIG in repo secrets:                no
+kubeconfig files committed to the repo:    0
+--- embedded credentials: 0 ---
+namespace/esc-ci-proof created
+configmap/run-marker created
+```
+
+### Setting up the trust
+
+`oidc/` registers the issuer and its allow policy with the Pulumi Service
+provider:
+
+```bash
+cd oidc && npm install
+pulumi stack init <org>/esc-doks-demo-oidc/dev
+pulumi config set org <org>
+pulumi config set subject 'repo:<owner>@<ownerId>/<repo>@<repoId>:*'
+pulumi up
+```
+
+Two things will trip you up, and both cost a failed run to discover.
+
+**One issuer per URL per org.** If anyone has already registered
+`https://token.actions.githubusercontent.com` in your organization, `pulumi up`
+fails with `400 ... already registered`, and there is no way to add a second.
+Because the provider models policies inline on the issuer, importing it means
+your stack owns *every* policy on it, including other people's. When the issuer
+is not yours, use `scripts/05-add-oidc-policy.sh` instead: it appends your policy
+via the Cloud API, then diffs every pre-existing policy before and after to prove
+nothing was disturbed.
+
+**The subject claim is probably not what the docs say.** Pulumi's documentation
+gives `repo:<organization>/<repo>:*`. GitHub may instead emit an *immutable*
+subject carrying numeric owner and repository IDs:
+
+```
+repo:wlami@564295/esc-doks-kubeconfig@1361241739:ref:refs/heads/main
+```
+
+A policy written against the documented pattern silently fails to match, and the
+only symptom is `401 Unauthorized (access_denied: unauthorized)` from the token
+exchange, which looks identical to having no policy at all.
+
+Do not guess the format. The workflow's first step prints the claims your job
+actually presents, so run it once and read the log:
+
+```
+sub                repo:wlami@564295/esc-doks-kubeconfig@1361241739:ref:refs/heads/main
+aud                urn:pulumi:org:demo
+repository         wlami/esc-doks-kubeconfig
+```
+
+Then set `subject` to that value with the trailing segment wildcarded
+(`...@1361241739:*`). Pinning the numeric IDs is *stronger* than the documented
+pattern, since it survives repository renames and blocks name-reuse attacks.
 
 ## What this does and does not buy you
 
