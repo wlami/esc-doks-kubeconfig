@@ -1,0 +1,19 @@
+# Environment: <org>/esc-doks-demo/do-access
+#
+# The ONE long-lived secret in this whole setup: a single DigitalOcean PAT.
+# Nothing downstream stores a Kubernetes credential; they are all minted from
+# this token, per invocation, and thrown away.
+#
+# The real token is NOT in this file. Overwrite the placeholder with:
+#   pulumi env set <org>/esc-doks-demo/do-access do.token <PAT> --secret
+# which replaces it with an encrypted value.
+values:
+  do:
+    token: REPLACE_ME
+
+  environmentVariables:
+    # doctl reads this: its viper env prefix is DIGITALOCEAN, so the
+    # "access-token" config key maps to DIGITALOCEAN_ACCESS_TOKEN.
+    DIGITALOCEAN_ACCESS_TOKEN: ${do.token}
+    # The Pulumi DigitalOcean provider reads this one.
+    DIGITALOCEAN_TOKEN: ${do.token}

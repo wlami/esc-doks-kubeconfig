@@ -1,0 +1,49 @@
+# Environment: <org>/esc-doks-demo/doks-dev
+#
+# Produces a kubeconfig that never expires, because it contains no credential
+# at all. kubectl shells out to doctl on every call and gets a fresh, short
+# lived token via the client-go ExecCredential protocol.
+imports:
+  - esc-doks-demo/do-access
+
+values:
+  # Read the STABLE cluster facts from the infra stack.
+  # Never read rawConfig here: that is the part that goes stale.
+  doks:
+    fn::open::pulumi-stacks:
+      stacks:
+        cluster:
+          stack: esc-doks-demo-infra/dev
+
+  # `files` writes this content to a temp file and puts the PATH in $KUBECONFIG.
+  # kubectl and the Pulumi Kubernetes provider both honour $KUBECONFIG, so
+  # nothing else needs configuring.
+  files:
+    KUBECONFIG: |
+      apiVersion: v1
+      kind: Config
+      current-context: esc-doks-demo
+      clusters:
+        - name: esc-doks-demo
+          cluster:
+            server: ${doks.cluster.clusterEndpoint}
+            certificate-authority-data: ${doks.cluster.clusterCaCertificate}
+      contexts:
+        - name: esc-doks-demo
+          context:
+            cluster: esc-doks-demo
+            user: esc-doks-demo
+      users:
+        - name: esc-doks-demo
+          user:
+            exec:
+              apiVersion: client.authentication.k8s.io/v1beta1
+              command: doctl
+              args:
+                - kubernetes
+                - cluster
+                - kubeconfig
+                - exec-credential
+                - --version=v1beta1
+                - --context=default
+                - ${doks.cluster.clusterId}

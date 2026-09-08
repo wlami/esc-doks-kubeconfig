@@ -1,0 +1,9 @@
+node_modules/
+bin/
+*.log
+.DS_Store
+Pulumi.*.yaml
+!Pulumi.yaml
+kubeconfig*
+*.kubeconfig
+.env

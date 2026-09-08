@@ -1,0 +1,9 @@
+{
+  "name": "esc-doks-demo-infra",
+  "main": "index.ts",
+  "devDependencies": { "@types/node": "^22" },
+  "dependencies": {
+    "@pulumi/pulumi": "^3.150.0",
+    "@pulumi/digitalocean": "^4.30.0"
+  }
+}
